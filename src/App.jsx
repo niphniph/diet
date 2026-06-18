@@ -82,6 +82,35 @@ const checkSubscriptionActive = (sub) => {
   return new Date(sub.subscriptionEndDate) >= new Date();
 };
 
+const saveUserPlansToSupabase = async (userId, plansData) => {
+  if (!userId) return;
+  try {
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        user_data: plansData.userData || null,
+        questionnaire_answers: plansData.questionnaireAnswers || null,
+        calculated_plan: plansData.calculatedPlan || null,
+        meal_plan: plansData.mealPlan || null,
+        workout_plan: plansData.workoutPlan || null,
+        subscription_data: plansData.subscriptionData || null,
+        target_calories: plansData.targetCalories || null,
+        macros: plansData.macros || null,
+        tdee: plansData.tdee || null,
+        selected_plan_type: plansData.selectedPlanType || null
+      })
+      .eq('id', userId);
+    
+    if (error) {
+      console.error('[Supabase] Failed to save plans:', error);
+    } else {
+      console.log('[Supabase] Successfully saved plans to database for:', userId);
+    }
+  } catch (err) {
+    console.error('[Supabase] Error saving plans:', err);
+  }
+};
+
 function App() {
   const [initialRoute] = useState(() => getInitialRoute());
   const [selectedPlanType, setSelectedPlanType] = useState(() => {
@@ -285,12 +314,25 @@ function App() {
         if (session?.user) {
           const { data: profile } = await supabase
             .from('profiles')
-            .select('is_email_verified')
+            .select('is_email_verified, user_data, questionnaire_answers, calculated_plan, meal_plan, workout_plan, subscription_data, target_calories, macros, tdee, selected_plan_type')
             .eq('id', session.user.id)
             .maybeSingle();
             
           if (profile) {
             setIsEmailVerified(profile.is_email_verified);
+            if (profile.meal_plan) setMealPlan(profile.meal_plan);
+            if (profile.workout_plan) setWorkoutPlan(profile.workout_plan);
+            if (profile.user_data) setUserData(profile.user_data);
+            if (profile.questionnaire_answers) setQuestionnaireAnswers(profile.questionnaire_answers);
+            if (profile.calculated_plan) setCalculatedPlan(profile.calculated_plan);
+            if (profile.target_calories) setTargetCalories(profile.target_calories);
+            if (profile.macros) setMacros(profile.macros);
+            if (profile.tdee) setTdee(profile.tdee);
+            if (profile.selected_plan_type) setSelectedPlanType(profile.selected_plan_type);
+            if (profile.subscription_data) {
+              setSubscriptionData(profile.subscription_data);
+              saveSubscription(profile.subscription_data);
+            }
           } else {
             setIsEmailVerified(false);
           }
@@ -310,12 +352,25 @@ function App() {
       if (session?.user) {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('is_email_verified')
+          .select('is_email_verified, user_data, questionnaire_answers, calculated_plan, meal_plan, workout_plan, subscription_data, target_calories, macros, tdee, selected_plan_type')
           .eq('id', session.user.id)
           .maybeSingle();
 
         if (profile) {
           setIsEmailVerified(profile.is_email_verified);
+          if (profile.meal_plan) setMealPlan(profile.meal_plan);
+          if (profile.workout_plan) setWorkoutPlan(profile.workout_plan);
+          if (profile.user_data) setUserData(profile.user_data);
+          if (profile.questionnaire_answers) setQuestionnaireAnswers(profile.questionnaire_answers);
+          if (profile.calculated_plan) setCalculatedPlan(profile.calculated_plan);
+          if (profile.target_calories) setTargetCalories(profile.target_calories);
+          if (profile.macros) setMacros(profile.macros);
+          if (profile.tdee) setTdee(profile.tdee);
+          if (profile.selected_plan_type) setSelectedPlanType(profile.selected_plan_type);
+          if (profile.subscription_data) {
+            setSubscriptionData(profile.subscription_data);
+            saveSubscription(profile.subscription_data);
+          }
         } else {
           setIsEmailVerified(false);
         }
@@ -411,9 +466,61 @@ function App() {
     const dataForPlans = userData || createDefaultUserData();
     if (!userData) setUserData(dataForPlans);
     generateAndSetPlans(dataForPlans);
+    
+    // Save to remote DB immediately if user is logged in
+    const nextUser = getCurrentUser();
+    if (nextUser) {
+      // Calculate plans synchronously so we don't have to wait for state updates
+      const age = parseInt(dataForPlans.age, 10) || 30;
+      let height = parseFloat(dataForPlans.height) || 170;
+      if (dataForPlans.heightUnit === 'ft') {
+        const ft = parseFloat(dataForPlans.heightFeet) || 0;
+        const inch = parseFloat(dataForPlans.heightInches) || 0;
+        height = (ft * 12 + inch) * 2.54;
+      }
+      let weight = parseFloat(dataForPlans.weight) || 70;
+      if (dataForPlans.weightUnit === 'lbs') weight = weight / 2.20462;
+      const gender = (dataForPlans.gender || 'Female').toLowerCase();
+      const activityMap = { 'Very low': 'sedentary', Light: 'light', Moderate: 'moderate', High: 'active', 'Very high': 'very_active' };
+      const goalMap = { 'Lose weight': 'lose', 'Gain muscle': 'gain', 'Maintain weight': 'maintain', 'Build healthier eating habits': 'maintain' };
+      const speedMap = { 'Slow and sustainable': 'slow', Moderate: 'moderate', Fast: 'fast' };
+      
+      const bmr = calculateBMR(gender, age, height, weight);
+      const tdeeValue = calculateTDEE(bmr, activityMap[dataForPlans.activityLevel] || 'light');
+      const cals = calculateTargetCalories(tdeeValue, gender, goalMap[dataForPlans.goal] || 'maintain', speedMap[dataForPlans.speed] || 'moderate');
+      const dietMap = { Vegetarian: 'vegetarian', Vegan: 'vegan', 'Low carb': 'low_carb', Mediterranean: 'mediterranean' };
+      const macs = calculateMacros(cals, dietMap[dataForPlans.diet] || 'anything');
+      
+      const generatedMeals = selectedPlanType.includes('nutrition')
+        ? generateMealPlan(cals, macs, {
+            ...dataForPlans,
+            allergies: Array.isArray(dataForPlans.allergies) ? dataForPlans.allergies.map((item) => item.toLowerCase()) : []
+          })
+        : null;
+        
+      const generatedWorkout = selectedPlanType.includes('workout')
+        ? generateWorkoutPlan(dataForPlans)
+        : null;
+
+      const plansData = {
+        userData: dataForPlans,
+        questionnaireAnswers,
+        calculatedPlan,
+        mealPlan: generatedMeals,
+        workoutPlan: generatedWorkout,
+        subscriptionData: newSubData,
+        targetCalories: cals,
+        macros: macs,
+        tdee: tdeeValue,
+        selectedPlanType
+      };
+      
+      await saveUserPlansToSupabase(nextUser, plansData);
+    }
+    
     setCurrentView('paymentSuccess');
     window.history.pushState(null, '', `${APP_BASE_PATH}/dashboard`);
-    window.setTimeout(() => setCurrentView('dashboard'), 1400);
+    window.setTimeout(() => navigateTo('dashboard'), 1400);
   };
 
   const handleSubscriptionChange = (updatedSubData) => {
@@ -485,34 +592,70 @@ function App() {
       <main style={{ minHeight: showHeader ? 'calc(100vh - 150px)' : '100vh', padding: showHeader ? '2rem 0' : '0' }}>
         {currentView === 'landing' && <LandingPage onStart={() => navigateTo('planSelection')} t={t} />}
         {currentView === 'planSelection' && <PlanTypeSelection onSelectPlanType={(type) => { setSelectedPlanType(type); setCurrentView('quiz'); }} t={t} />}
-        {currentView === 'register' && <Register onRegisterSuccess={(email, verified) => {
+        {currentView === 'register' && <Register onRegisterSuccess={(email, verified, dbProfile) => {
           setUserEmail(email);
           setIsEmailVerified(verified);
           const nextUser = getCurrentUser();
-          const savedQuestionnaire = getUserQuestionnairePlan(nextUser);
-          setQuestionnaireAnswers(savedQuestionnaire.questionnaireAnswers);
-          setCalculatedPlan(savedQuestionnaire.calculatedPlan);
-          const userSub = getUserSubscription(nextUser);
-          if (userSub) {
-            setSubscriptionData(userSub);
-            saveSubscription(userSub);
-          } else {
-            const guestSub = safeJsonParse(localStorage.getItem('nutriPlanSubscription'), null);
-            if (guestSub && guestSub.hasActiveSubscription) {
-              guestSub.userId = nextUser;
-              setSubscriptionData(guestSub);
-              saveSubscription(guestSub);
+          
+          if (dbProfile) {
+            if (dbProfile.user_data) setUserData(dbProfile.user_data);
+            if (dbProfile.questionnaire_answers) setQuestionnaireAnswers(dbProfile.questionnaire_answers);
+            if (dbProfile.calculated_plan) setCalculatedPlan(dbProfile.calculated_plan);
+            if (dbProfile.meal_plan) setMealPlan(dbProfile.meal_plan);
+            if (dbProfile.workout_plan) setWorkoutPlan(dbProfile.workout_plan);
+            if (dbProfile.target_calories) setTargetCalories(dbProfile.target_calories);
+            if (dbProfile.macros) setMacros(dbProfile.macros);
+            if (dbProfile.tdee) setTdee(dbProfile.tdee);
+            if (dbProfile.selected_plan_type) setSelectedPlanType(dbProfile.selected_plan_type);
+            
+            if (dbProfile.subscription_data) {
+              setSubscriptionData(dbProfile.subscription_data);
+              saveSubscription(dbProfile.subscription_data);
             } else {
-              setSubscriptionData(null);
-              localStorage.removeItem('nutriPlanSubscription');
-              localStorage.removeItem('subscriptionActive');
-              localStorage.removeItem('cancelAtPeriodEnd');
-              localStorage.removeItem('selectedPlan');
-              localStorage.removeItem('selectedPlanPrice');
-              localStorage.removeItem('subscriptionDate');
-              localStorage.removeItem('renewalDate');
+              const guestSub = safeJsonParse(localStorage.getItem('nutriPlanSubscription'), null);
+              if (guestSub && guestSub.hasActiveSubscription) {
+                guestSub.userId = nextUser;
+                setSubscriptionData(guestSub);
+                saveSubscription(guestSub);
+              } else {
+                setSubscriptionData(null);
+                localStorage.removeItem('nutriPlanSubscription');
+                localStorage.removeItem('subscriptionActive');
+                localStorage.removeItem('cancelAtPeriodEnd');
+                localStorage.removeItem('selectedPlan');
+                localStorage.removeItem('selectedPlanPrice');
+                localStorage.removeItem('subscriptionDate');
+                localStorage.removeItem('renewalDate');
+              }
+            }
+
+            // Sync guest data if remote profile is empty
+            if (!dbProfile.user_data && userData) {
+              const plansData = {
+                userData,
+                questionnaireAnswers,
+                calculatedPlan,
+                mealPlan,
+                workoutPlan,
+                subscriptionData: dbProfile.subscription_data || safeJsonParse(localStorage.getItem('nutriPlanSubscription'), null),
+                targetCalories,
+                macros,
+                tdee,
+                selectedPlanType
+              };
+              saveUserPlansToSupabase(nextUser, plansData);
+            }
+          } else {
+            const savedQuestionnaire = getUserQuestionnairePlan(nextUser);
+            setQuestionnaireAnswers(savedQuestionnaire.questionnaireAnswers);
+            setCalculatedPlan(savedQuestionnaire.calculatedPlan);
+            const userSub = getUserSubscription(nextUser);
+            if (userSub) {
+              setSubscriptionData(userSub);
+              saveSubscription(userSub);
             }
           }
+          
           if (!verified) {
             navigateTo('verifyEmail');
           } else {
@@ -527,6 +670,22 @@ function App() {
             onBackToLogin={handleLogout} 
             onVerificationSuccess={() => {
               setIsEmailVerified(true);
+              const nextUser = getCurrentUser();
+              if (nextUser) {
+                const plansData = {
+                  userData,
+                  questionnaireAnswers,
+                  calculatedPlan,
+                  mealPlan,
+                  workoutPlan,
+                  subscriptionData,
+                  targetCalories,
+                  macros,
+                  tdee,
+                  selectedPlanType
+                };
+                saveUserPlansToSupabase(nextUser, plansData);
+              }
               navigateTo('dashboard');
             }}
             t={t} 

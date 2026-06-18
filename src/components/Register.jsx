@@ -47,10 +47,10 @@ const Register = ({ onRegisterSuccess, t }) => {
         if (signInError) throw signInError;
         if (!signInData?.user) throw new Error('Failed to sign in. Please try again.');
 
-        // 2. Fetch profile from database to check email verification status
+        // 2. Fetch profile from database to check email verification status and load user plans
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('id, full_name, is_email_verified')
+          .select('id, full_name, is_email_verified, user_data, questionnaire_answers, calculated_plan, meal_plan, workout_plan, subscription_data, target_calories, macros, tdee, selected_plan_type')
           .eq('id', signInData.user.id)
           .maybeSingle();
 
@@ -89,7 +89,7 @@ const Register = ({ onRegisterSuccess, t }) => {
 
         // 4. Trigger success callback
         if (onRegisterSuccess) {
-          onRegisterSuccess(normalizedEmail, isEmailVerified);
+          onRegisterSuccess(normalizedEmail, isEmailVerified, profile);
         }
       } else {
         // --- REGISTRATION LOGIC ---
