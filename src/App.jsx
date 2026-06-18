@@ -111,6 +111,85 @@ const saveUserPlansToSupabase = async (userId, plansData) => {
   }
 };
 
+function PaymentSuccessScreen({ onComplete, setMealPlan, setWorkoutPlan, setTargetCalories, setMacros, setTdee, setUserData, setCalculatedPlan, t }) {
+  const [status, setStatus] = useState('Generating your meal plan...');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    async function generateAfterPayment() {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        if (!token) {
+          throw new Error('User session not found.');
+        }
+
+        const res = await fetch("/api/diet/meal-plan/generate", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            paymentStatus: "success"
+          })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to generate meal plan");
+        }
+
+        if (active) {
+          setStatus("Meal plan generated successfully!");
+          if (data.mealPlan) setMealPlan(data.mealPlan.content || data.mealPlan);
+          if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
+          if (data.targetCalories) setTargetCalories(data.targetCalories);
+          if (data.macros) setMacros(data.macros);
+          if (data.tdee) setTdee(data.tdee);
+          if (data.userData) setUserData(data.userData);
+          if (data.calculatedPlan) setCalculatedPlan(data.calculatedPlan);
+
+          setTimeout(() => {
+            onComplete();
+          }, 1200);
+        }
+      } catch (err) {
+        if (active) {
+          console.error('[PaymentSuccess] Generation failed:', err);
+          setError(err.message || "Meal plan generation failed");
+        }
+      }
+    }
+
+    generateAfterPayment();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <div className="container flex-col items-center justify-center animate-fade-in status-screen" style={{ minHeight: '60vh', gap: '1rem' }}>
+      {error ? (
+        <>
+          <span className="material-symbols-outlined text-danger animate-pulse" style={{ fontSize: '4.5rem', color: '#ffb4ab' }}>error</span>
+          <h2>Generation Failed</h2>
+          <p className="text-muted">{error}</p>
+          <button className="btn btn-primary" onClick={onComplete}>Go to Dashboard</button>
+        </>
+      ) : (
+        <>
+          <span className="material-symbols-outlined text-primary animate-pulse" style={{ fontSize: '4.5rem' }}>check_circle</span>
+          <h2>{status}</h2>
+          <p className="text-muted">Thank you for your purchase! We are preparing your personalized dashboard...</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [initialRoute] = useState(() => getInitialRoute());
   const [selectedPlanType, setSelectedPlanType] = useState(() => {
@@ -514,7 +593,7 @@ function App() {
 
         const data = await res.json();
         if (data.success) {
-          if (data.mealPlan) setMealPlan(data.mealPlan);
+          if (data.mealPlan) setMealPlan(data.mealPlan.content || data.mealPlan);
           if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
           if (data.targetCalories) setTargetCalories(data.targetCalories);
           if (data.macros) setMacros(data.macros);
@@ -571,7 +650,7 @@ function App() {
 
           const data = await res.json();
           if (data.success) {
-            if (data.mealPlan) setMealPlan(data.mealPlan);
+            if (data.mealPlan) setMealPlan(data.mealPlan.content || data.mealPlan);
             if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
             if (data.targetCalories) setTargetCalories(data.targetCalories);
             if (data.macros) setMacros(data.macros);
@@ -641,33 +720,8 @@ function App() {
               subscription_data: newSubData
             })
             .eq('id', nextUser);
-
-          const res = await fetch('/api/diet/meal-plan/generate', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            }
-          });
-
-          if (!res.ok) {
-            const errData = await res.json();
-            throw new Error(errData.error || 'Failed to generate plan.');
-          }
-
-          const data = await res.json();
-          if (data.success) {
-            if (data.mealPlan) setMealPlan(data.mealPlan);
-            if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
-            if (data.targetCalories) setTargetCalories(data.targetCalories);
-            if (data.macros) setMacros(data.macros);
-            if (data.tdee) setTdee(data.tdee);
-            if (data.userData) setUserData(data.userData);
-            if (data.calculatedPlan) setCalculatedPlan(data.calculatedPlan);
-          }
         } catch (err) {
-          console.error('[API Error] Payment success generation failed, using client fallback:', err);
-          await runClientSideGeneration(questionnaireAnswers, calculatedPlan, dataForPlans);
+          console.error('[API Error] Payment success subscription sync failed:', err);
         }
       }
     } else {
@@ -676,7 +730,6 @@ function App() {
 
     setCurrentView('paymentSuccess');
     window.history.pushState(null, '', `${APP_BASE_PATH}/dashboard`);
-    window.setTimeout(() => navigateTo('dashboard', 'meals'), 1400);
   };
 
   const handleSubscriptionChange = (updatedSubData) => {
@@ -915,12 +968,17 @@ function App() {
         {currentView === 'terms' && <TermsPolicies onBack={() => navigateTo(userData ? 'dashboard' : 'landing')} onSubscribe={handleUnlockFullPlan} />}
 
         {currentView === 'paymentSuccess' && (
-          <div className="container flex-col items-center justify-center animate-fade-in status-screen">
-            <span className="material-symbols-outlined text-primary">check_circle</span>
-            <h2>{t('paymentSuccessTitle')}</h2>
-            <p className="text-muted">{t('paymentSuccessSubtitle')}</p>
-            <button className="btn btn-outline" onClick={() => setCurrentView('dashboard')}>{t('btnGoToDashboard')}</button>
-          </div>
+          <PaymentSuccessScreen
+            onComplete={() => navigateTo('dashboard', 'meals')}
+            setMealPlan={setMealPlan}
+            setWorkoutPlan={setWorkoutPlan}
+            setTargetCalories={setTargetCalories}
+            setMacros={setMacros}
+            setTdee={setTdee}
+            setUserData={setUserData}
+            setCalculatedPlan={setCalculatedPlan}
+            t={t}
+          />
         )}
 
         {currentView === 'dashboard' && activeSubscription && (
