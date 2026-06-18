@@ -1,1 +1,13 @@
-/diet/* /diet/index.html 200
+/diet/terms /diet/index.html 200
+/diet/subscription /diet/index.html 200
+/diet/friends /diet/index.html 200
+/diet/leaderboard /diet/index.html 200
+/diet/questionnaire /diet/index.html 200
+/diet/plan-preview /diet/index.html 200
+/diet/login /diet/index.html 200
+/diet/register /diet/index.html 200
+/diet/verify-email /diet/index.html 200
+/diet/meal-plan /diet/index.html 200
+/diet/food-scanner /diet/index.html 200
+/diet/progress /diet/index.html 200
+/diet/dashboard /diet/index.html 200
