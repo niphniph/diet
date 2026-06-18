@@ -426,72 +426,7 @@ function App() {
     navigateTo('questionnaire');
   };
 
-  const handleGeneratePlansManually = async () => {
-    const dataForPlans = userData || createDefaultUserData();
-    if (!userData) setUserData(dataForPlans);
-
-    const age = parseInt(dataForPlans.age, 10) || 30;
-    let height = parseFloat(dataForPlans.height) || 170;
-    if (dataForPlans.heightUnit === 'ft') {
-      const ft = parseFloat(dataForPlans.heightFeet) || 0;
-      const inch = parseFloat(dataForPlans.heightInches) || 0;
-      height = (ft * 12 + inch) * 2.54;
-    }
-    let weight = parseFloat(dataForPlans.weight) || 70;
-    if (dataForPlans.weightUnit === 'lbs') weight = weight / 2.20462;
-    const gender = (dataForPlans.gender || 'Female').toLowerCase();
-    const activityMap = { 'Very low': 'sedentary', Light: 'light', Moderate: 'moderate', High: 'active', 'Very high': 'very_active' };
-    const goalMap = { 'Lose weight': 'lose', 'Gain muscle': 'gain', 'Maintain weight': 'maintain', 'Build healthier eating habits': 'maintain' };
-    const speedMap = { 'Slow and sustainable': 'slow', Moderate: 'moderate', Fast: 'fast' };
-
-    const bmr = calculateBMR(gender, age, height, weight);
-    const tdeeValue = calculateTDEE(bmr, activityMap[dataForPlans.activityLevel] || 'light');
-    const cals = calculateTargetCalories(tdeeValue, gender, goalMap[dataForPlans.goal] || 'maintain', speedMap[dataForPlans.speed] || 'moderate');
-    const dietMap = { Vegetarian: 'vegetarian', Vegan: 'vegan', 'Low carb': 'low_carb', Mediterranean: 'mediterranean' };
-    const macs = calculateMacros(cals, dietMap[dataForPlans.diet] || 'anything');
-
-    const generatedMeals = selectedPlanType.includes('nutrition')
-      ? generateMealPlan(cals, macs, {
-          ...dataForPlans,
-          allergies: Array.isArray(dataForPlans.allergies) ? dataForPlans.allergies.map((item) => item.toLowerCase()) : []
-        })
-      : null;
-
-    const generatedWorkout = selectedPlanType.includes('workout')
-      ? generateWorkoutPlan(dataForPlans)
-      : null;
-
-    setTdee(tdeeValue);
-    setTargetCalories(cals);
-    setMacros(macs);
-    setMealPlan(generatedMeals);
-    setWorkoutPlan(generatedWorkout);
-
-    const nextUser = getCurrentUser();
-    if (nextUser) {
-      const plansData = {
-        userData: dataForPlans,
-        questionnaireAnswers,
-        calculatedPlan,
-        mealPlan: generatedMeals,
-        workoutPlan: generatedWorkout,
-        subscriptionData,
-        targetCalories: cals,
-        macros: macs,
-        tdee: tdeeValue,
-        selectedPlanType
-      };
-      await saveUserPlansToSupabase(nextUser, plansData);
-    }
-  };
-
-  const handleQuestionnaireComplete = async (answers, plan) => {
-    const planUserData = answersToUserData(answers);
-    setQuestionnaireAnswers(answers);
-    setCalculatedPlan(plan);
-    setUserData(planUserData);
-    saveUserQuestionnairePlan(currentUser, answers, plan);
-
+  const runClientSideGeneration = async (answers, plan, planUserData) => {
     const age = parseInt(planUserData.age, 10) || 30;
     let height = parseFloat(planUserData.height) || 170;
     if (planUserData.heightUnit === 'ft') {
@@ -544,9 +479,119 @@ function App() {
       };
       await saveUserPlansToSupabase(currentUser, plansData);
     }
+  };
+
+  const handleGeneratePlansManually = async () => {
+    // 1. Check if questionnaire data is missing
+    if (!questionnaireAnswers || !userData) {
+      navigateTo('questionnaire');
+      return;
+    }
+
+    // 2. Check if payment is required
+    if (!isSubscriptionActive()) {
+      navigateTo('paywall');
+      return;
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
+    if (token) {
+      try {
+        const res = await fetch('/api/diet/meal-plan/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || 'Failed to generate plan.');
+        }
+
+        const data = await res.json();
+        if (data.success) {
+          if (data.mealPlan) setMealPlan(data.mealPlan);
+          if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
+          if (data.targetCalories) setTargetCalories(data.targetCalories);
+          if (data.macros) setMacros(data.macros);
+          if (data.tdee) setTdee(data.tdee);
+          if (data.userData) setUserData(data.userData);
+          if (data.calculatedPlan) setCalculatedPlan(data.calculatedPlan);
+        }
+      } catch (err) {
+        console.error('[API Error] Manual generation failed, running client-side fallback:', err);
+        await runClientSideGeneration(questionnaireAnswers, calculatedPlan, userData);
+        throw err;
+      }
+    } else {
+      throw new Error('User session not found.');
+    }
+  };
+
+  const handleQuestionnaireComplete = async (answers, plan) => {
+    const planUserData = answersToUserData(answers);
+    setQuestionnaireAnswers(answers);
+    setCalculatedPlan(plan);
+    setUserData(planUserData);
+    saveUserQuestionnairePlan(currentUser, answers, plan);
+
+    if (currentUser) {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const hasActiveSub = checkSubscriptionActive(subscriptionData);
+
+      if (token && hasActiveSub) {
+        try {
+          // Pre-save questionnaire answers so Page Function can fetch them
+          await supabase
+            .from('profiles')
+            .update({
+              questionnaire_answers: answers,
+              user_data: planUserData,
+              calculated_plan: plan
+            })
+            .eq('id', currentUser);
+
+          const res = await fetch('/api/diet/meal-plan/generate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            }
+          });
+
+          if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.error || 'Failed to generate plan.');
+          }
+
+          const data = await res.json();
+          if (data.success) {
+            if (data.mealPlan) setMealPlan(data.mealPlan);
+            if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
+            if (data.targetCalories) setTargetCalories(data.targetCalories);
+            if (data.macros) setMacros(data.macros);
+            if (data.tdee) setTdee(data.tdee);
+            if (data.userData) setUserData(data.userData);
+            if (data.calculatedPlan) setCalculatedPlan(data.calculatedPlan);
+          }
+        } catch (err) {
+          console.error('[API Error] Questionnaire completion API generation failed, using client-side fallback:', err);
+          await runClientSideGeneration(answers, plan, planUserData);
+        }
+      } else {
+        await runClientSideGeneration(answers, plan, planUserData);
+      }
+    } else {
+      await runClientSideGeneration(answers, plan, planUserData);
+    }
 
     if (checkSubscriptionActive(subscriptionData)) {
-      navigateTo('dashboard');
+      navigateTo('dashboard', 'meals');
     } else {
       navigateTo('planPreview');
     }
@@ -581,62 +626,57 @@ function App() {
     saveSubscription(newSubData);
     const dataForPlans = userData || createDefaultUserData();
     if (!userData) setUserData(dataForPlans);
-    generateAndSetPlans(dataForPlans);
-    
-    // Save to remote DB immediately if user is logged in
+
     const nextUser = getCurrentUser();
     if (nextUser) {
-      // Calculate plans synchronously so we don't have to wait for state updates
-      const age = parseInt(dataForPlans.age, 10) || 30;
-      let height = parseFloat(dataForPlans.height) || 170;
-      if (dataForPlans.heightUnit === 'ft') {
-        const ft = parseFloat(dataForPlans.heightFeet) || 0;
-        const inch = parseFloat(dataForPlans.heightInches) || 0;
-        height = (ft * 12 + inch) * 2.54;
-      }
-      let weight = parseFloat(dataForPlans.weight) || 70;
-      if (dataForPlans.weightUnit === 'lbs') weight = weight / 2.20462;
-      const gender = (dataForPlans.gender || 'Female').toLowerCase();
-      const activityMap = { 'Very low': 'sedentary', Light: 'light', Moderate: 'moderate', High: 'active', 'Very high': 'very_active' };
-      const goalMap = { 'Lose weight': 'lose', 'Gain muscle': 'gain', 'Maintain weight': 'maintain', 'Build healthier eating habits': 'maintain' };
-      const speedMap = { 'Slow and sustainable': 'slow', Moderate: 'moderate', Fast: 'fast' };
-      
-      const bmr = calculateBMR(gender, age, height, weight);
-      const tdeeValue = calculateTDEE(bmr, activityMap[dataForPlans.activityLevel] || 'light');
-      const cals = calculateTargetCalories(tdeeValue, gender, goalMap[dataForPlans.goal] || 'maintain', speedMap[dataForPlans.speed] || 'moderate');
-      const dietMap = { Vegetarian: 'vegetarian', Vegan: 'vegan', 'Low carb': 'low_carb', Mediterranean: 'mediterranean' };
-      const macs = calculateMacros(cals, dietMap[dataForPlans.diet] || 'anything');
-      
-      const generatedMeals = selectedPlanType.includes('nutrition')
-        ? generateMealPlan(cals, macs, {
-            ...dataForPlans,
-            allergies: Array.isArray(dataForPlans.allergies) ? dataForPlans.allergies.map((item) => item.toLowerCase()) : []
-          })
-        : null;
-        
-      const generatedWorkout = selectedPlanType.includes('workout')
-        ? generateWorkoutPlan(dataForPlans)
-        : null;
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
 
-      const plansData = {
-        userData: dataForPlans,
-        questionnaireAnswers,
-        calculatedPlan,
-        mealPlan: generatedMeals,
-        workoutPlan: generatedWorkout,
-        subscriptionData: newSubData,
-        targetCalories: cals,
-        macros: macs,
-        tdee: tdeeValue,
-        selectedPlanType
-      };
-      
-      await saveUserPlansToSupabase(nextUser, plansData);
+      if (token) {
+        try {
+          // Sync new subscription data first so generate API verifies payment successfully
+          await supabase
+            .from('profiles')
+            .update({
+              subscription_data: newSubData
+            })
+            .eq('id', nextUser);
+
+          const res = await fetch('/api/diet/meal-plan/generate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            }
+          });
+
+          if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.error || 'Failed to generate plan.');
+          }
+
+          const data = await res.json();
+          if (data.success) {
+            if (data.mealPlan) setMealPlan(data.mealPlan);
+            if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
+            if (data.targetCalories) setTargetCalories(data.targetCalories);
+            if (data.macros) setMacros(data.macros);
+            if (data.tdee) setTdee(data.tdee);
+            if (data.userData) setUserData(data.userData);
+            if (data.calculatedPlan) setCalculatedPlan(data.calculatedPlan);
+          }
+        } catch (err) {
+          console.error('[API Error] Payment success generation failed, using client fallback:', err);
+          await runClientSideGeneration(questionnaireAnswers, calculatedPlan, dataForPlans);
+        }
+      }
+    } else {
+      generateAndSetPlans(dataForPlans);
     }
-    
+
     setCurrentView('paymentSuccess');
     window.history.pushState(null, '', `${APP_BASE_PATH}/dashboard`);
-    window.setTimeout(() => navigateTo('dashboard'), 1400);
+    window.setTimeout(() => navigateTo('dashboard', 'meals'), 1400);
   };
 
   const handleSubscriptionChange = (updatedSubData) => {
