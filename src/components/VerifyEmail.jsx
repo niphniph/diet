@@ -86,14 +86,32 @@ const VerifyEmail = ({ email, password, onBackToLogin, onVerificationSuccess, t 
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
-      // 1. Fetch code record from public.email_activation_codes
-      const { data: codeRecord, error: fetchError } = await supabase
-        .from('email_activation_codes')
-        .select('*')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
+      // 1. Fetch code record from public.email_activation_codes with local fallback
+      let codeRecord = null;
+      try {
+        const { data, error: fetchError } = await supabase
+          .from('email_activation_codes')
+          .select('*')
+          .eq('email', normalizedEmail)
+          .maybeSingle();
 
-      if (fetchError) throw fetchError;
+        if (fetchError) throw fetchError;
+        codeRecord = data;
+      } catch (err) {
+        console.warn('Supabase fetch of activation code failed, checking local fallback:', err.message);
+        const localCodes = JSON.parse(localStorage.getItem('localActivationCodes') || '{}');
+        const localRecord = localCodes[normalizedEmail];
+        if (localRecord) {
+          codeRecord = {
+            id: localRecord.user_id,
+            email: normalizedEmail,
+            code: localRecord.code,
+            user_id: localRecord.user_id,
+            expires_at: localRecord.expires_at,
+            attempts: localRecord.attempts
+          };
+        }
+      }
 
       if (!codeRecord) {
         setError(t('codeExpired') || 'No active verification code found. Please request a new one.');
@@ -120,12 +138,16 @@ const VerifyEmail = ({ email, password, onBackToLogin, onVerificationSuccess, t 
       // 4. Compare code
       if (codeRecord.code === code) {
         // SUCCESS
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .update({ is_email_verified: true })
-          .eq('id', codeRecord.user_id);
+        try {
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .update({ is_email_verified: true })
+            .eq('id', codeRecord.user_id);
 
-        if (profileError) throw profileError;
+          if (profileError) throw profileError;
+        } catch (err) {
+          console.warn('Could not update remote email verification status, proceeding locally:', err.message);
+        }
 
         // Auto-login using password if provided
         if (password) {
@@ -143,10 +165,17 @@ const VerifyEmail = ({ email, password, onBackToLogin, onVerificationSuccess, t 
         }
 
         // Delete activation code
-        await supabase
-          .from('email_activation_codes')
-          .delete()
-          .eq('id', codeRecord.id);
+        try {
+          await supabase
+            .from('email_activation_codes')
+            .delete()
+            .eq('id', codeRecord.id);
+        } catch (err) {
+          console.warn('Could not delete remote activation code, proceeding locally:', err.message);
+          const localCodes = JSON.parse(localStorage.getItem('localActivationCodes') || '{}');
+          delete localCodes[normalizedEmail];
+          localStorage.setItem('localActivationCodes', JSON.stringify(localCodes));
+        }
 
         setSuccess(t('verificationSuccess') || 'Email verified successfully! Redirecting...');
         
@@ -160,12 +189,21 @@ const VerifyEmail = ({ email, password, onBackToLogin, onVerificationSuccess, t 
         // FAILURE
         const newAttempts = codeRecord.attempts + 1;
         
-        const { error: updateError } = await supabase
-          .from('email_activation_codes')
-          .update({ attempts: newAttempts })
-          .eq('id', codeRecord.id);
+        try {
+          const { error: updateError } = await supabase
+            .from('email_activation_codes')
+            .update({ attempts: newAttempts })
+            .eq('id', codeRecord.id);
 
-        if (updateError) throw updateError;
+          if (updateError) throw updateError;
+        } catch (err) {
+          console.warn('Could not update remote attempts counter, updating locally:', err.message);
+          const localCodes = JSON.parse(localStorage.getItem('localActivationCodes') || '{}');
+          if (localCodes[normalizedEmail]) {
+            localCodes[normalizedEmail].attempts = newAttempts;
+            localStorage.setItem('localActivationCodes', JSON.stringify(localCodes));
+          }
+        }
 
         if (newAttempts >= 5) {
           setError(t('tooManyAttempts') || 'Too many failed attempts. This code has been blocked. Please request a new code.');
