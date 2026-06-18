@@ -188,7 +188,7 @@ const Register = ({ onRegisterSuccess, t }) => {
         // 8. Trigger success callback (unverified by default)
         if (onRegisterSuccess) {
           setTimeout(() => {
-            onRegisterSuccess(normalizedEmail, false);
+            onRegisterSuccess(normalizedEmail, false, null, password);
           }, 1500);
         }
       }

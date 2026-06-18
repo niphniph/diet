@@ -210,6 +210,7 @@ function App() {
     }
     return localStorage.getItem('nutriPlanEmail') || '';
   });
+  const [userPassword, setUserPassword] = useState('');
   const [userData, setUserData] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('sessionId')) {
@@ -399,6 +400,9 @@ function App() {
             
           if (profile) {
             setIsEmailVerified(profile.is_email_verified);
+            const username = session.user.email ? session.user.email.split('@')[0] : session.user.id;
+            localStorage.setItem('currentUser', username);
+            setCurrentUser(username);
             if (profile.meal_plan) setMealPlan(profile.meal_plan);
             if (profile.workout_plan) setWorkoutPlan(profile.workout_plan);
             if (profile.user_data) setUserData(profile.user_data);
@@ -437,6 +441,9 @@ function App() {
 
         if (profile) {
           setIsEmailVerified(profile.is_email_verified);
+          const username = session.user.email ? session.user.email.split('@')[0] : session.user.id;
+          localStorage.setItem('currentUser', username);
+          setCurrentUser(username);
           if (profile.meal_plan) setMealPlan(profile.meal_plan);
           if (profile.workout_plan) setWorkoutPlan(profile.workout_plan);
           if (profile.user_data) setUserData(profile.user_data);
@@ -543,7 +550,8 @@ function App() {
     setMealPlan(generatedMeals);
     setWorkoutPlan(generatedWorkout);
 
-    if (currentUser) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) {
       const plansData = {
         userData: planUserData,
         questionnaireAnswers: answers,
@@ -556,7 +564,7 @@ function App() {
         tdee: tdeeValue,
         selectedPlanType
       };
-      await saveUserPlansToSupabase(currentUser, plansData);
+      await saveUserPlansToSupabase(session.user.id, plansData);
     }
   };
 
@@ -623,7 +631,7 @@ function App() {
       const token = session?.access_token;
       const hasActiveSub = checkSubscriptionActive(subscriptionData);
 
-      if (token && hasActiveSub) {
+      if (token && session?.user?.id && hasActiveSub) {
         try {
           // Pre-save questionnaire answers so Page Function can fetch them
           await supabase
@@ -633,7 +641,7 @@ function App() {
               user_data: planUserData,
               calculated_plan: plan
             })
-            .eq('id', currentUser);
+            .eq('id', session.user.id);
 
           const res = await fetch('/api/diet/meal-plan/generate', {
             method: 'POST',
@@ -711,7 +719,7 @@ function App() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      if (token) {
+      if (token && session?.user?.id) {
         try {
           // Sync new subscription data first so generate API verifies payment successfully
           await supabase
@@ -719,7 +727,7 @@ function App() {
             .update({
               subscription_data: newSubData
             })
-            .eq('id', nextUser);
+            .eq('id', session.user.id);
         } catch (err) {
           console.error('[API Error] Payment success subscription sync failed:', err);
         }
@@ -801,12 +809,15 @@ function App() {
       <main style={{ minHeight: showHeader ? 'calc(100vh - 150px)' : '100vh', padding: showHeader ? '2rem 0' : '0' }}>
         {currentView === 'landing' && <LandingPage onStart={() => navigateTo('planSelection')} t={t} />}
         {currentView === 'planSelection' && <PlanTypeSelection onSelectPlanType={(type) => { setSelectedPlanType(type); setCurrentView('quiz'); }} t={t} />}
-        {currentView === 'register' && <Register onRegisterSuccess={(email, verified, dbProfile) => {
+        {currentView === 'register' && <Register onRegisterSuccess={(email, verified, dbProfile, password) => {
           setUserEmail(email);
           setIsEmailVerified(verified);
+          if (password) setUserPassword(password);
           const nextUser = getCurrentUser();
+          setCurrentUser(nextUser);
           
           if (dbProfile) {
+            const userId = dbProfile.id;
             if (dbProfile.user_data) setUserData(dbProfile.user_data);
             if (dbProfile.questionnaire_answers) setQuestionnaireAnswers(dbProfile.questionnaire_answers);
             if (dbProfile.calculated_plan) setCalculatedPlan(dbProfile.calculated_plan);
@@ -852,7 +863,7 @@ function App() {
                 tdee,
                 selectedPlanType
               };
-              saveUserPlansToSupabase(nextUser, plansData);
+              saveUserPlansToSupabase(userId, plansData);
             }
           } else {
             const savedQuestionnaire = getUserQuestionnairePlan(nextUser);
@@ -876,11 +887,18 @@ function App() {
         {currentView === 'verifyEmail' && (
           <VerifyEmail 
             email={userEmail} 
+            password={userPassword}
             onBackToLogin={handleLogout} 
-            onVerificationSuccess={() => {
+            onVerificationSuccess={async () => {
               setIsEmailVerified(true);
-              const nextUser = getCurrentUser();
-              if (nextUser) {
+              const { data: { session } } = await supabase.auth.getSession();
+              const userId = session?.user?.id;
+              
+              if (userId) {
+                const nextUser = session.user.email ? session.user.email.split('@')[0] : userId;
+                localStorage.setItem('currentUser', nextUser);
+                setCurrentUser(nextUser);
+                
                 const plansData = {
                   userData,
                   questionnaireAnswers,
@@ -893,9 +911,12 @@ function App() {
                   tdee,
                   selectedPlanType
                 };
-                saveUserPlansToSupabase(nextUser, plansData);
+                saveUserPlansToSupabase(userId, plansData);
+                navigateTo('dashboard');
+              } else {
+                alert(langCode === 'en' ? 'Email verified! Please log in to your account.' : 'ელ-ფოსტა დადასტურდა! გთხოვთ გაიაროთ ავტორიზაცია.');
+                navigateTo('register');
               }
-              navigateTo('dashboard');
             }}
             t={t} 
           />

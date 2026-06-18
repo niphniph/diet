@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
-const VerifyEmail = ({ email, onBackToLogin, onVerificationSuccess, t }) => {
+const VerifyEmail = ({ email, password, onBackToLogin, onVerificationSuccess, t }) => {
   const [codeDigits, setCodeDigits] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
@@ -126,6 +126,21 @@ const VerifyEmail = ({ email, onBackToLogin, onVerificationSuccess, t }) => {
           .eq('id', codeRecord.user_id);
 
         if (profileError) throw profileError;
+
+        // Auto-login using password if provided
+        if (password) {
+          try {
+            const { error: signInError } = await supabase.auth.signInWithPassword({
+              email: normalizedEmail,
+              password: password
+            });
+            if (signInError) {
+              console.warn('Auto-login failed after verification:', signInError);
+            }
+          } catch (err) {
+            console.warn('Auto-login error:', err);
+          }
+        }
 
         // Delete activation code
         await supabase
