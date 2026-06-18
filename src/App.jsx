@@ -426,14 +426,130 @@ function App() {
     navigateTo('questionnaire');
   };
 
-  const handleQuestionnaireComplete = (answers, plan) => {
+  const handleGeneratePlansManually = async () => {
+    const dataForPlans = userData || createDefaultUserData();
+    if (!userData) setUserData(dataForPlans);
+
+    const age = parseInt(dataForPlans.age, 10) || 30;
+    let height = parseFloat(dataForPlans.height) || 170;
+    if (dataForPlans.heightUnit === 'ft') {
+      const ft = parseFloat(dataForPlans.heightFeet) || 0;
+      const inch = parseFloat(dataForPlans.heightInches) || 0;
+      height = (ft * 12 + inch) * 2.54;
+    }
+    let weight = parseFloat(dataForPlans.weight) || 70;
+    if (dataForPlans.weightUnit === 'lbs') weight = weight / 2.20462;
+    const gender = (dataForPlans.gender || 'Female').toLowerCase();
+    const activityMap = { 'Very low': 'sedentary', Light: 'light', Moderate: 'moderate', High: 'active', 'Very high': 'very_active' };
+    const goalMap = { 'Lose weight': 'lose', 'Gain muscle': 'gain', 'Maintain weight': 'maintain', 'Build healthier eating habits': 'maintain' };
+    const speedMap = { 'Slow and sustainable': 'slow', Moderate: 'moderate', Fast: 'fast' };
+
+    const bmr = calculateBMR(gender, age, height, weight);
+    const tdeeValue = calculateTDEE(bmr, activityMap[dataForPlans.activityLevel] || 'light');
+    const cals = calculateTargetCalories(tdeeValue, gender, goalMap[dataForPlans.goal] || 'maintain', speedMap[dataForPlans.speed] || 'moderate');
+    const dietMap = { Vegetarian: 'vegetarian', Vegan: 'vegan', 'Low carb': 'low_carb', Mediterranean: 'mediterranean' };
+    const macs = calculateMacros(cals, dietMap[dataForPlans.diet] || 'anything');
+
+    const generatedMeals = selectedPlanType.includes('nutrition')
+      ? generateMealPlan(cals, macs, {
+          ...dataForPlans,
+          allergies: Array.isArray(dataForPlans.allergies) ? dataForPlans.allergies.map((item) => item.toLowerCase()) : []
+        })
+      : null;
+
+    const generatedWorkout = selectedPlanType.includes('workout')
+      ? generateWorkoutPlan(dataForPlans)
+      : null;
+
+    setTdee(tdeeValue);
+    setTargetCalories(cals);
+    setMacros(macs);
+    setMealPlan(generatedMeals);
+    setWorkoutPlan(generatedWorkout);
+
+    const nextUser = getCurrentUser();
+    if (nextUser) {
+      const plansData = {
+        userData: dataForPlans,
+        questionnaireAnswers,
+        calculatedPlan,
+        mealPlan: generatedMeals,
+        workoutPlan: generatedWorkout,
+        subscriptionData,
+        targetCalories: cals,
+        macros: macs,
+        tdee: tdeeValue,
+        selectedPlanType
+      };
+      await saveUserPlansToSupabase(nextUser, plansData);
+    }
+  };
+
+  const handleQuestionnaireComplete = async (answers, plan) => {
     const planUserData = answersToUserData(answers);
     setQuestionnaireAnswers(answers);
     setCalculatedPlan(plan);
     setUserData(planUserData);
     saveUserQuestionnairePlan(currentUser, answers, plan);
-    generateAndSetPlans(planUserData);
-    navigateTo('planPreview');
+
+    const age = parseInt(planUserData.age, 10) || 30;
+    let height = parseFloat(planUserData.height) || 170;
+    if (planUserData.heightUnit === 'ft') {
+      const ft = parseFloat(planUserData.heightFeet) || 0;
+      const inch = parseFloat(planUserData.heightInches) || 0;
+      height = (ft * 12 + inch) * 2.54;
+    }
+    let weight = parseFloat(planUserData.weight) || 70;
+    if (planUserData.weightUnit === 'lbs') weight = weight / 2.20462;
+    const gender = (planUserData.gender || 'Female').toLowerCase();
+    const activityMap = { 'Very low': 'sedentary', Light: 'light', Moderate: 'moderate', High: 'active', 'Very high': 'very_active' };
+    const goalMap = { 'Lose weight': 'lose', 'Gain muscle': 'gain', 'Maintain weight': 'maintain', 'Build healthier eating habits': 'maintain' };
+    const speedMap = { 'Slow and sustainable': 'slow', Moderate: 'moderate', Fast: 'fast' };
+
+    const bmr = calculateBMR(gender, age, height, weight);
+    const tdeeValue = calculateTDEE(bmr, activityMap[planUserData.activityLevel] || 'light');
+    const cals = calculateTargetCalories(tdeeValue, gender, goalMap[planUserData.goal] || 'maintain', speedMap[planUserData.speed] || 'moderate');
+    const dietMap = { Vegetarian: 'vegetarian', Vegan: 'vegan', 'Low carb': 'low_carb', Mediterranean: 'mediterranean' };
+    const macs = calculateMacros(cals, dietMap[planUserData.diet] || 'anything');
+
+    const generatedMeals = selectedPlanType.includes('nutrition')
+      ? generateMealPlan(cals, macs, {
+          ...planUserData,
+          allergies: Array.isArray(planUserData.allergies) ? planUserData.allergies.map((item) => item.toLowerCase()) : []
+        })
+      : null;
+
+    const generatedWorkout = selectedPlanType.includes('workout')
+      ? generateWorkoutPlan(planUserData)
+      : null;
+
+    setTdee(tdeeValue);
+    setTargetCalories(cals);
+    setMacros(macs);
+    setMealPlan(generatedMeals);
+    setWorkoutPlan(generatedWorkout);
+
+    if (currentUser) {
+      const plansData = {
+        userData: planUserData,
+        questionnaireAnswers: answers,
+        calculatedPlan: plan,
+        mealPlan: generatedMeals,
+        workoutPlan: generatedWorkout,
+        subscriptionData,
+        targetCalories: cals,
+        macros: macs,
+        tdee: tdeeValue,
+        selectedPlanType
+      };
+      await saveUserPlansToSupabase(currentUser, plansData);
+    }
+
+    if (checkSubscriptionActive(subscriptionData)) {
+      navigateTo('dashboard');
+    } else {
+      navigateTo('planPreview');
+    }
   };
 
   const handleUnlockFullPlan = () => {
@@ -779,6 +895,7 @@ function App() {
             tdee={tdee}
             subscriptionData={subscriptionData}
             onCreateNewPlan={handleCalculateMyPlan}
+            onGeneratePlans={handleGeneratePlansManually}
             activeTab={dashboardTab}
             onActiveTabChange={(tab) => {
               setDashboardTab(tab);

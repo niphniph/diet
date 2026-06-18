@@ -16,7 +16,7 @@ const safeJsonParse = (value, fallback) => {
 // Helper to satisfy purity linter rule for Date.now
 const getTimestamp = () => Date.now();
 
-const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMealPlan, targetCalories, macros, user, tdee, subscriptionData, onCreateNewPlan, activeTab: requestedTab = 'overview', onActiveTabChange, onOpenLeaderboard, t }) => {
+const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMealPlan, targetCalories, macros, user, tdee, subscriptionData, onCreateNewPlan, onGeneratePlans, activeTab: requestedTab = 'overview', onActiveTabChange, onOpenLeaderboard, t }) => {
   const langCode = t('home') === 'Home' ? 'en' : 'ka';
 
   // Dynamic Tabs Adaptability
@@ -58,6 +58,29 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
   const activeTab = requestedTab;
   const setActiveTab = (tab) => {
     onActiveTabChange?.(tab);
+  };
+
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [genError, setGenError] = useState('');
+  const [genSuccess, setGenSuccess] = useState('');
+
+  const handleGenerate = async () => {
+    setIsGenerating(true);
+    setGenError('');
+    setGenSuccess('');
+    try {
+      if (onGeneratePlans) {
+        await onGeneratePlans();
+        setGenSuccess('Plans successfully generated!');
+        setTimeout(() => setGenSuccess(''), 3000);
+      } else {
+        throw new Error('Plan generation is not configured.');
+      }
+    } catch (err) {
+      setGenError(err.message || 'Failed to generate plans.');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // Rest Timer State
@@ -1055,7 +1078,18 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
                 onReplace={(m) => handleReplaceMeal(viewDay - 1, idx, m.type)} 
                 t={t}
               />
-            )) : <p>{t('mealsNotFound')}</p>}
+            )) : (
+              <div className="card text-center" style={{ padding: '3rem 2rem' }}>
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>restaurant_menu</span>
+                <h3>No meal plan found</h3>
+                <p className="text-muted" style={{ marginBottom: '1.5rem' }}>You haven't generated your personalized meal plan yet.</p>
+                {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
+                {genSuccess && <p className="text-success" style={{ marginBottom: '1rem', color: '#10b981' }}>{genSuccess}</p>}
+                <button className="btn btn-primary" onClick={handleGenerate} disabled={isGenerating}>
+                  {isGenerating ? 'Generating...' : 'Generate Meal Plan'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1857,7 +1891,18 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
                   </div>
                 )}
               </div>
-            ) : <p>{t('workoutsNotFound')}</p>}
+            ) : (
+              <div className="card text-center" style={{ padding: '3rem 2rem' }}>
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>fitness_center</span>
+                <h3>No workout plan found</h3>
+                <p className="text-muted" style={{ marginBottom: '1.5rem' }}>You haven't generated your personalized workout program yet.</p>
+                {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
+                {genSuccess && <p className="text-success" style={{ marginBottom: '1rem', color: '#10b981' }}>{genSuccess}</p>}
+                <button className="btn btn-primary" onClick={handleGenerate} disabled={isGenerating}>
+                  {isGenerating ? 'Generating...' : 'Generate Workout Plan'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1983,8 +2028,15 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
           {groceryList && Object.keys(groceryList).length > 0 ? (
             <GroceryList groceryList={groceryList} currency={user?.currency || 'USD'} t={t} />
           ) : (
-            <div className="card text-center text-muted">
-              <p>Grocery list is empty. Please regenerate your meal plan.</p>
+            <div className="card text-center" style={{ padding: '3rem 2rem' }}>
+              <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>local_grocery_store</span>
+              <h3>Grocery list is empty</h3>
+              <p className="text-muted" style={{ marginBottom: '1.5rem' }}>Generate your meal plan to populate your grocery list.</p>
+              {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
+              {genSuccess && <p className="text-success" style={{ marginBottom: '1rem', color: '#10b981' }}>{genSuccess}</p>}
+              <button className="btn btn-primary" onClick={handleGenerate} disabled={isGenerating}>
+                {isGenerating ? 'Generating...' : 'Generate Meal Plan'}
+              </button>
             </div>
           )}
         </div>
