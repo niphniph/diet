@@ -26,6 +26,74 @@ import './index.css';
 
 const APP_BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, '') || '/diet';
 
+const DIET_ANSWERS_KEY = "nutriplan_diet_answers";
+const MEAL_PLAN_KEY = "nutriplan_meal_plan";
+const PAYMENT_SUCCESS_KEY = "nutriplan_payment_success";
+
+function getGuestId() {
+  let guestId = localStorage.getItem("nutriplan_guest_id");
+  if (!guestId) {
+    guestId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Math.random().toString(36).substring(2) + Date.now().toString(36);
+    localStorage.setItem("nutriplan_guest_id", guestId);
+  }
+  return guestId;
+}
+
+async function getOptionalUserId() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.user?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+function getStoredAnswers() {
+  const raw =
+    localStorage.getItem(DIET_ANSWERS_KEY) ||
+    localStorage.getItem("dietAnswers") ||
+    localStorage.getItem("questionnaireAnswers") ||
+    localStorage.getItem("mealPlanAnswers");
+
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function generateMealPlanFromAnswers(answers) {
+  const userId = await getOptionalUserId();
+  const guestId = getGuestId();
+
+  const response = await fetch("/api/generate-meal-plan", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      userId,
+      guestId,
+      answers,
+      language: localStorage.getItem("nutriPlanLang") || "ka"
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "Meal plan generation failed");
+  }
+
+  localStorage.setItem(MEAL_PLAN_KEY, JSON.stringify(data.mealPlan || data));
+  return data.mealPlan || data;
+}
+
+
 const getInitialRoute = () => {
   const path = window.location.pathname.replace(/\/+$/, '');
   if (path.endsWith('/terms')) return { view: 'terms' };
@@ -278,12 +346,25 @@ function App() {
   const [userPassword, setUserPassword] = useState('');
   const [userData, setUserData] = useState(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('sessionId')) {
-      return safeJsonParse(localStorage.getItem('nutriPlanData'), null) || createDefaultUserData();
+    let localData = safeJsonParse(localStorage.getItem('nutriPlanData'), null);
+    if (!localData) {
+      const answers = getStoredAnswers();
+      if (answers) {
+        localData = answersToUserData(answers);
+      }
     }
-    return safeJsonParse(localStorage.getItem('nutriPlanData'), null);
+    if (params.get('sessionId')) {
+      return localData || createDefaultUserData();
+    }
+    return localData;
   });
   const [mealPlan, setMealPlan] = useState(() => {
+    const rawGuest = localStorage.getItem("nutriplan_meal_plan");
+    if (rawGuest) {
+      try {
+        return JSON.parse(rawGuest);
+      } catch {}
+    }
     return safeJsonParse(localStorage.getItem('nutriPlanResult'), null);
   });
   const [workoutPlan, setWorkoutPlan] = useState(() => {
@@ -301,9 +382,9 @@ function App() {
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState(() => {
     const storedUser = getCurrentUser();
     if (storedUser) {
-      return getUserQuestionnairePlan(storedUser).questionnaireAnswers || null;
+      return getUserQuestionnairePlan(storedUser).questionnaireAnswers || getStoredAnswers() || null;
     }
-    return null;
+    return getStoredAnswers() || null;
   });
   const [calculatedPlan, setCalculatedPlan] = useState(() => {
     const storedUser = getCurrentUser();
@@ -347,7 +428,11 @@ function App() {
     const storedUser = getCurrentUser();
 
     if (!storedUser && ['dashboard', 'questionnaire', 'planPreview'].includes(route.view)) {
-      return 'register';
+      if (route.view === 'dashboard' && route.tab === 'meals') {
+        // Allow guest to access meals tab on dashboard
+      } else {
+        return 'register';
+      }
     }
 
     if (route.view === 'landing') {
@@ -366,6 +451,9 @@ function App() {
     const storedUser = getCurrentUser();
     const route = getInitialRoute();
     if (!storedUser && ['dashboard', 'questionnaire', 'planPreview'].includes(route.view)) {
+      if (route.view === 'dashboard' && route.tab === 'meals') {
+        return '';
+      }
       return route.view === 'planPreview' ? 'questionnaire' : route.view;
     }
     return '';
@@ -554,12 +642,20 @@ function App() {
     if (isAuthLoading) return;
 
     const params = new URLSearchParams(window.location.search);
-    if (params.get("payment") === "success" && params.get("generate") === "true") {
-      // Clean query parameters from URL
-      window.history.replaceState({}, document.title, window.location.pathname);
-      handleGenerateMealPlan();
+    if (params.get("payment") === "success") {
+      localStorage.setItem(PAYMENT_SUCCESS_KEY, "true");
     }
-  }, [isAuthLoading]);
+
+    if (params.get("payment") === "success" && params.get("generate") === "true") {
+      if (currentView === 'dashboard' && dashboardTab === 'meals') {
+        // Let ResultsDashboard handle it to show loading spinner
+      } else {
+        // Clean query parameters from URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        handleGenerateMealPlan().catch(console.error);
+      }
+    }
+  }, [isAuthLoading, currentView, dashboardTab]);
 
   useEffect(() => {
     if (userData) localStorage.setItem('nutriPlanData', JSON.stringify(userData));
@@ -650,57 +746,33 @@ function App() {
 
   const handleGenerateMealPlan = async () => {
     try {
-      const userId = await getCurrentUserId();
+      const answers = getStoredAnswers();
 
-      if (!userId) {
-        throw new Error("Please log in first");
-      }
-
-      const answersRaw =
-        localStorage.getItem("dietAnswers") ||
-        localStorage.getItem("questionnaireAnswers") ||
-        localStorage.getItem("mealPlanAnswers");
-
-      if (!answersRaw) {
+      if (!answers) {
         throw new Error("Please complete the questionnaire first");
       }
 
-      const answers = JSON.parse(answersRaw);
+      const generatedPlan = await generateMealPlanFromAnswers(answers);
+      setMealPlan(generatedPlan);
 
-      const response = await fetch("/api/generate-meal-plan", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          userId,
-          answers
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to generate meal plan");
-      }
-
-      setMealPlan(data.mealPlan);
-
-      // Save to database
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const token = session?.access_token;
-        if (token) {
-          await supabase
-            .from('profiles')
-            .update({
-              meal_plan: data.mealPlan,
-              questionnaire_answers: answers
-            })
-            .eq('id', userId);
+      // Save to database if possible
+      const userId = await getOptionalUserId();
+      if (userId) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+          if (token) {
+            await supabase
+              .from('profiles')
+              .update({
+                meal_plan: generatedPlan,
+                questionnaire_answers: answers
+              })
+              .eq('id', userId);
+          }
+        } catch (dbErr) {
+          console.warn("Could not save to Supabase during manual generation:", dbErr);
         }
-      } catch (dbErr) {
-        console.warn("Could not save to Supabase during manual generation:", dbErr);
       }
     } catch (err) {
       throw err;
@@ -713,6 +785,7 @@ function App() {
     setCalculatedPlan(plan);
     setUserData(planUserData);
     localStorage.setItem("dietAnswers", JSON.stringify(answers));
+    localStorage.setItem("nutriplan_diet_answers", JSON.stringify(answers));
     saveUserQuestionnairePlan(currentUser, answers, plan);
 
     if (currentUser) {
@@ -1055,7 +1128,7 @@ function App() {
           />
         )}
 
-        {currentView === 'quiz' && <QuizFlow onComplete={(data) => { setUserData(data); localStorage.setItem("dietAnswers", JSON.stringify(data)); setCurrentView('emailCapture'); }} selectedPlanType={selectedPlanType} t={t} />}
+        {currentView === 'quiz' && <QuizFlow onComplete={(data) => { setUserData(data); localStorage.setItem("dietAnswers", JSON.stringify(data)); localStorage.setItem("nutriplan_diet_answers", JSON.stringify(data)); setCurrentView('emailCapture'); }} selectedPlanType={selectedPlanType} t={t} />}
         {currentView === 'emailCapture' && <EmailCapture onSubmit={handleEmailSubmit} selectedPlanType={selectedPlanType} currentLanguage={currentLanguage} t={t} />}
 
         {currentView === 'emailSent' && (
@@ -1100,7 +1173,7 @@ function App() {
           />
         )}
 
-        {currentView === 'dashboard' && activeSubscription && (
+        {currentView === 'dashboard' && (activeSubscription || dashboardTab === 'meals') && (
           <ResultsDashboard
             mealPlan={mealPlan || []}
             workoutPlan={workoutPlan}
@@ -1123,7 +1196,7 @@ function App() {
           />
         )}
 
-        {currentView === 'dashboard' && !activeSubscription && (
+        {currentView === 'dashboard' && !activeSubscription && dashboardTab !== 'meals' && (
           <div className="container locked-preview">
             <span className="material-symbols-outlined text-primary">lock</span>
             <h2>{langCode === 'en' ? 'Premium sections are locked' : 'Plan Locked'}</h2>

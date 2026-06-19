@@ -4,6 +4,12 @@ import MealCard from './MealCard';
 import GroceryList from './GroceryList';
 import WorkoutCard from './WorkoutCard';
 import { generateSingleMeal, generateGroceryList } from '../utils/mealGenerator';
+import QuestionnairePage from './QuestionnairePage';
+import { supabase } from '../lib/supabaseClient';
+
+const DIET_ANSWERS_KEY = "nutriplan_diet_answers";
+const MEAL_PLAN_KEY = "nutriplan_meal_plan";
+const PAYMENT_SUCCESS_KEY = "nutriplan_payment_success";
 
 const safeJsonParse = (value, fallback) => {
   try {
@@ -63,25 +69,136 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
   const [isGenerating, setIsGenerating] = useState(false);
   const [genError, setGenError] = useState('');
   const [genSuccess, setGenSuccess] = useState('');
+  const [showQuestionnaire, setShowQuestionnaire] = useState(false);
 
-  const handleGenerate = async () => {
-    setIsGenerating(true);
-    setGenError('');
-    setGenSuccess('');
+  const getGuestId = () => {
+    let guestId = localStorage.getItem("nutriplan_guest_id");
+    if (!guestId) {
+      guestId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+        ? crypto.randomUUID() 
+        : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      localStorage.setItem("nutriplan_guest_id", guestId);
+    }
+    return guestId;
+  };
+
+  const getOptionalUserId = async () => {
     try {
-      if (onGeneratePlans) {
-        await onGeneratePlans();
-        setGenSuccess('Plans successfully generated!');
-        setTimeout(() => setGenSuccess(''), 3000);
-      } else {
-        throw new Error('Plan generation is not configured.');
+      const { data } = await supabase.auth.getSession();
+      return data?.session?.user?.id || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const getStoredAnswers = () => {
+    const raw =
+      localStorage.getItem(DIET_ANSWERS_KEY) ||
+      localStorage.getItem("dietAnswers") ||
+      localStorage.getItem("questionnaireAnswers") ||
+      localStorage.getItem("mealPlanAnswers");
+
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const generateMealPlanFromAnswers = async (answers) => {
+    const userId = await getOptionalUserId();
+    const guestId = getGuestId();
+
+    const response = await fetch("/api/generate-meal-plan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        userId,
+        guestId,
+        answers,
+        language: localStorage.getItem("language") || "ka"
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Meal plan generation failed");
+    }
+
+    localStorage.setItem(MEAL_PLAN_KEY, JSON.stringify(data.mealPlan || data));
+    return data.mealPlan || data;
+  };
+
+  const handleGenerateMealPlan = async () => {
+    setGenError("");
+    setIsGenerating(true);
+
+    try {
+      const answers = getStoredAnswers();
+
+      if (!answers) {
+        setShowQuestionnaire(true);
+        return;
       }
-    } catch (err) {
-      setGenError(err.message || 'Failed to generate plans.');
+
+      const generatedPlan = await generateMealPlanFromAnswers(answers);
+      setMealPlan(generatedPlan);
+      setShowQuestionnaire(false);
+      setGenSuccess("Meal plan generated successfully!");
+      setTimeout(() => setGenSuccess(""), 3000);
+    } catch (error) {
+      setGenError(error.message || "Generation failed");
     } finally {
       setIsGenerating(false);
     }
   };
+
+  const handleQuestionnaireSubmit = async (answers) => {
+    setGenError("");
+    setIsGenerating(true);
+
+    try {
+      localStorage.setItem(DIET_ANSWERS_KEY, JSON.stringify(answers));
+
+      const generatedPlan = await generateMealPlanFromAnswers(answers);
+
+      setMealPlan(generatedPlan);
+      setShowQuestionnaire(false);
+      setGenSuccess("Meal plan generated successfully!");
+      setTimeout(() => setGenSuccess(""), 3000);
+    } catch (error) {
+      setGenError(error.message || "Generation failed");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Check URL params and load stored meal plan
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("payment") === "success") {
+      localStorage.setItem(PAYMENT_SUCCESS_KEY, "true");
+    }
+
+    const storedMealPlan = localStorage.getItem(MEAL_PLAN_KEY);
+
+    if (storedMealPlan) {
+      try {
+        setMealPlan(JSON.parse(storedMealPlan));
+        return;
+      } catch {}
+    }
+
+    if (params.get("generate") === "true") {
+      handleGenerateMealPlan();
+    }
+  }, []);
 
   // Rest Timer State
   const [timerActive, setTimerActive] = useState(false);
@@ -1047,7 +1164,14 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
       {/* 2. MEAL PLAN VIEW */}
       {activeTab === 'meals' && selectedPlanType !== 'workout_only' && (
         <div className="animate-fade-in">
-          {typeof mealPlan === 'string' ? (
+          {showQuestionnaire ? (
+            <QuestionnairePage 
+              onSubmit={handleQuestionnaireSubmit} 
+              t={t} 
+              currentUser={currentUsername} 
+              onRequireLogin={() => {}}
+            />
+          ) : typeof mealPlan === 'string' ? (
             <div className="card" style={{ maxWidth: '800px', margin: '0 auto', padding: '2.5rem', lineHeight: '1.8', fontSize: '1.05rem', backgroundColor: 'var(--color-surface-container)' }}>
               <h3 style={{ marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span className="material-symbols-outlined text-primary">eco</span>
@@ -1057,50 +1181,69 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
             </div>
           ) : (
             <>
-              {mealPlan.length > 1 && (
-                <div className="flex justify-center gap-2" style={{ marginBottom: '2.5rem', flexWrap: 'wrap' }}>
-                  {mealPlan.map((day, idx) => (
-                    <button 
-                      key={idx}
-                      className={`btn btn-sm ${viewDay === idx + 1 ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{
-                        padding: '0.5rem 1rem',
-                        minWidth: '70px',
-                        backgroundColor: viewDay === idx + 1 ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
-                        color: viewDay === idx + 1 ? '#111316' : 'var(--color-text)'
-                      }}
-                      onClick={() => setViewDay(idx + 1)}
-                    >
-                      {langCode === 'en' ? `Day ${idx + 1}` : `დღე ${idx + 1}`}
-                    </button>
-                  ))}
+              {Array.isArray(mealPlan) && mealPlan.length > 1 ? (
+                <>
+                  <div className="flex justify-center gap-2" style={{ marginBottom: '2.5rem', flexWrap: 'wrap' }}>
+                    {mealPlan.map((day, idx) => (
+                      <button 
+                        key={idx}
+                        className={`btn btn-sm ${viewDay === idx + 1 ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          minWidth: '70px',
+                          backgroundColor: viewDay === idx + 1 ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                          color: viewDay === idx + 1 ? '#111316' : 'var(--color-text)'
+                        }}
+                        onClick={() => setViewDay(idx + 1)}
+                      >
+                        {langCode === 'en' ? `Day ${idx + 1}` : `დღე ${idx + 1}`}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                    <h3 style={{ marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem' }}>
+                      {langCode === 'en' ? `Day ${viewDay} Menu` : `დღე ${viewDay}-ის მენიუ`}
+                    </h3>
+                    {Array.isArray(mealPlan[viewDay - 1]?.meals) ? mealPlan[viewDay - 1].meals.map((meal, idx) => (
+                      <MealCard 
+                        key={meal.id || idx} 
+                        meal={meal} 
+                        onReplace={(m) => handleReplaceMeal(viewDay - 1, idx, m.type)} 
+                        t={t}
+                      />
+                    )) : null}
+                  </div>
+                </>
+              ) : (
+                <div className="card text-center" style={{ padding: '3rem 2rem' }}>
+                  <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>restaurant_menu</span>
+                  
+                  {getStoredAnswers() ? (
+                    <>
+                      <h3>{langCode === 'en' ? 'Your answers are ready!' : 'თქვენი პასუხები მზადაა!'}</h3>
+                      <p className="text-muted" style={{ marginBottom: '1.5rem' }}>
+                        {langCode === 'en' ? 'Click below to generate your personalized AI meal plan.' : 'დააჭირეთ ქვემოთ თქვენი პერსონალური AI კვების გეგმის დასაგენერირებლად.'}
+                      </p>
+                      {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
+                      <button className="btn btn-primary" onClick={handleGenerateMealPlan} disabled={isGenerating}>
+                        {isGenerating ? (langCode === 'en' ? 'Generating...' : 'გენერირდება...') : (langCode === 'en' ? 'Generate Meal Plan' : 'კვების გეგმის გენერაცია')}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <h3>{langCode === 'en' ? 'No meal plan found' : 'კვების გეგმა ვერ მოიძებნა'}</h3>
+                      <p className="text-muted" style={{ marginBottom: '1.5rem' }}>
+                        {langCode === 'en' ? "You haven't generated your personalized meal plan yet. Please start by completing the questionnaire." : "თქვენ ჯერ არ გაგიგენერირებიათ კვების გეგმა. გთხოვთ, დაიწყოთ კითხვარის შევსებით."}
+                      </p>
+                      {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
+                      <button className="btn btn-primary" onClick={() => setShowQuestionnaire(true)}>
+                        {langCode === 'en' ? 'Start Questionnaire' : 'კითხვარის დაწყება'}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
-              
-              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                <h3 style={{ marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem' }}>
-                  {langCode === 'en' ? `Day ${viewDay} Menu` : `დღე ${viewDay}-ის მენიუ`}
-                </h3>
-                {Array.isArray(mealPlan[viewDay - 1]?.meals) ? mealPlan[viewDay - 1].meals.map((meal, idx) => (
-                  <MealCard 
-                    key={meal.id || idx} 
-                    meal={meal} 
-                    onReplace={(m) => handleReplaceMeal(viewDay - 1, idx, m.type)} 
-                    t={t}
-                  />
-                )) : (
-                  <div className="card text-center" style={{ padding: '3rem 2rem' }}>
-                    <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>restaurant_menu</span>
-                    <h3>No meal plan found</h3>
-                    <p className="text-muted" style={{ marginBottom: '1.5rem' }}>You haven't generated your personalized meal plan yet.</p>
-                    {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
-                    {genSuccess && <p className="text-success" style={{ marginBottom: '1rem', color: '#10b981' }}>{genSuccess}</p>}
-                    <button className="btn btn-primary" onClick={handleGenerate} disabled={isGenerating}>
-                      {isGenerating ? 'Generating...' : 'Generate Meal Plan'}
-                    </button>
-                  </div>
-                )}
-              </div>
             </>
           )}
         </div>
