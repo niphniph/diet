@@ -134,6 +134,12 @@ function PaymentSuccessScreen({
     let active = true;
     async function generateAfterPayment() {
       try {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+        if (userError || !user?.id) {
+          throw new Error("Please log in first");
+        }
+
         const { data: { session } } = await supabase.auth.getSession();
         let token = session?.access_token;
 
@@ -142,16 +148,12 @@ function PaymentSuccessScreen({
           token = `mock_token_for_${email}`;
         }
 
-        if (!token) {
-          throw new Error('User session not found.');
-        }
-
         // Retrieve dietAnswers from localStorage as requested
         const storedAnswers = localStorage.getItem("dietAnswers");
         const answers = storedAnswers ? JSON.parse(storedAnswers) : (questionnaireAnswers || null);
 
         if (!answers) {
-          throw new Error("Meal plan answers not found");
+          throw new Error("Please complete the questionnaire first");
         }
 
         const res = await fetch("/api/generate-meal-plan", {
@@ -160,7 +162,10 @@ function PaymentSuccessScreen({
             "Content-Type": "application/json",
             "Authorization": `Bearer ${token}`
           },
-          body: JSON.stringify({ answers })
+          body: JSON.stringify({
+            userId: user.id,
+            answers
+          })
         });
 
         const data = await res.json();
@@ -615,64 +620,58 @@ function App() {
   };
 
   const handleGeneratePlansManually = async () => {
-    // 1. Check if questionnaire data is missing
-    if (!questionnaireAnswers || !userData) {
-      navigateTo('questionnaire');
-      return;
-    }
+    try {
+      const answersRaw = localStorage.getItem("dietAnswers");
 
-    // 2. Check if payment is required
-    if (!isSubscriptionActive()) {
-      navigateTo('paywall');
-      return;
-    }
-
-    const { data: { session } } = await supabase.auth.getSession();
-    let token = session?.access_token;
-
-    if (!token && currentUser) {
-      const email = localStorage.getItem('nutriPlanEmail') || `${currentUser}@example.com`;
-      token = `mock_token_for_${email}`;
-    }
-
-    if (token) {
-      try {
-        const res = await fetch('/api/diet/meal-plan/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            paymentStatus: "success",
-            questionnaireAnswers: questionnaireAnswers || null,
-            userData: userData || null,
-            selectedPlanType: selectedPlanType || 'nutrition_workout_bundle'
-          })
-        });
-
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || 'Failed to generate plan.');
-        }
-
-        const data = await res.json();
-        if (data.success) {
-          if (data.mealPlan) setMealPlan(data.mealPlan.content || data.mealPlan);
-          if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
-          if (data.targetCalories) setTargetCalories(data.targetCalories);
-          if (data.macros) setMacros(data.macros);
-          if (data.tdee) setTdee(data.tdee);
-          if (data.userData) setUserData(data.userData);
-          if (data.calculatedPlan) setCalculatedPlan(data.calculatedPlan);
-        }
-      } catch (err) {
-        console.error('[API Error] Manual generation failed, running client-side fallback:', err);
-        await runClientSideGeneration(questionnaireAnswers, calculatedPlan, userData);
+      if (!answersRaw) {
+        throw new Error("Please complete the questionnaire first");
       }
-    } else {
-      console.warn('[Session] No session found, running client fallback.');
-      await runClientSideGeneration(questionnaireAnswers, calculatedPlan, userData);
+
+      const answers = JSON.parse(answersRaw);
+
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+      if (userError || !user?.id) {
+        throw new Error("Please log in first");
+      }
+
+      const response = await fetch("/api/generate-meal-plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          answers
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to generate meal plan");
+      }
+
+      setMealPlan(data.mealPlan);
+
+      // Save to database
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        if (token) {
+          await supabase
+            .from('profiles')
+            .update({
+              meal_plan: data.mealPlan,
+              questionnaire_answers: answers
+            })
+            .eq('id', user.id);
+        }
+      } catch (dbErr) {
+        console.warn("Could not save to Supabase during manual generation:", dbErr);
+      }
+    } catch (err) {
+      throw err;
     }
   };
 
