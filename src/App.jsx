@@ -146,18 +146,21 @@ function PaymentSuccessScreen({
           throw new Error('User session not found.');
         }
 
-        const res = await fetch("/api/diet/meal-plan/generate", {
+        // Retrieve dietAnswers from localStorage as requested
+        const storedAnswers = localStorage.getItem("dietAnswers");
+        const answers = storedAnswers ? JSON.parse(storedAnswers) : (questionnaireAnswers || null);
+
+        if (!answers) {
+          throw new Error("Meal plan answers not found");
+        }
+
+        const res = await fetch("/api/generate-meal-plan", {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
             "Authorization": `Bearer ${token}`
           },
-          body: JSON.stringify({
-            paymentStatus: "success",
-            questionnaireAnswers: questionnaireAnswers || null,
-            userData: localUserData || null,
-            selectedPlanType: selectedPlanType || 'nutrition_workout_bundle'
-          })
+          body: JSON.stringify({ answers })
         });
 
         const data = await res.json();
@@ -168,7 +171,7 @@ function PaymentSuccessScreen({
 
         if (active) {
           setStatus("Meal plan generated successfully!");
-          if (data.mealPlan) setMealPlan(data.mealPlan.content || data.mealPlan);
+          if (data.mealPlan) setMealPlan(data.mealPlan);
           if (data.workoutPlan) setWorkoutPlan(data.workoutPlan);
           if (data.targetCalories) setTargetCalories(data.targetCalories);
           if (data.macros) setMacros(data.macros);
@@ -678,6 +681,7 @@ function App() {
     setQuestionnaireAnswers(answers);
     setCalculatedPlan(plan);
     setUserData(planUserData);
+    localStorage.setItem("dietAnswers", JSON.stringify(answers));
     saveUserQuestionnairePlan(currentUser, answers, plan);
 
     if (currentUser) {
@@ -1019,7 +1023,7 @@ function App() {
           />
         )}
 
-        {currentView === 'quiz' && <QuizFlow onComplete={(data) => { setUserData(data); setCurrentView('emailCapture'); }} selectedPlanType={selectedPlanType} t={t} />}
+        {currentView === 'quiz' && <QuizFlow onComplete={(data) => { setUserData(data); localStorage.setItem("dietAnswers", JSON.stringify(data)); setCurrentView('emailCapture'); }} selectedPlanType={selectedPlanType} t={t} />}
         {currentView === 'emailCapture' && <EmailCapture onSubmit={handleEmailSubmit} selectedPlanType={selectedPlanType} currentLanguage={currentLanguage} t={t} />}
 
         {currentView === 'emailSent' && (

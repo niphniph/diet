@@ -1047,50 +1047,62 @@ const ResultsDashboard = ({ mealPlan = [], workoutPlan, selectedPlanType, setMea
       {/* 2. MEAL PLAN VIEW */}
       {activeTab === 'meals' && selectedPlanType !== 'workout_only' && (
         <div className="animate-fade-in">
-          {mealPlan.length > 1 && (
-            <div className="flex justify-center gap-2" style={{ marginBottom: '2.5rem', flexWrap: 'wrap' }}>
-              {mealPlan.map((day, idx) => (
-                <button 
-                  key={idx}
-                  className={`btn btn-sm ${viewDay === idx + 1 ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{
-                    padding: '0.5rem 1rem',
-                    minWidth: '70px',
-                    backgroundColor: viewDay === idx + 1 ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
-                    color: viewDay === idx + 1 ? '#111316' : 'var(--color-text)'
-                  }}
-                  onClick={() => setViewDay(idx + 1)}
-                >
-                  {langCode === 'en' ? `Day ${idx + 1}` : `დღე ${idx + 1}`}
-                </button>
-              ))}
+          {typeof mealPlan === 'string' ? (
+            <div className="card" style={{ maxWidth: '800px', margin: '0 auto', padding: '2.5rem', lineHeight: '1.8', fontSize: '1.05rem', backgroundColor: 'var(--color-surface-container)' }}>
+              <h3 style={{ marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span className="material-symbols-outlined text-primary">eco</span>
+                {langCode === 'en' ? 'Your Personal Meal Plan' : 'თქვენი პერსონალური კვების გეგმა'}
+              </h3>
+              <div id="meal-plan" dangerouslySetInnerHTML={{ __html: mealPlan.replace(/\n/g, '<br>') }} />
             </div>
-          )}
-          
-          <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-            <h3 style={{ marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem' }}>
-              {langCode === 'en' ? `Day ${viewDay} Menu` : `დღე ${viewDay}-ის მენიუ`}
-            </h3>
-            {Array.isArray(mealPlan[viewDay - 1]?.meals) ? mealPlan[viewDay - 1].meals.map((meal, idx) => (
-              <MealCard 
-                key={meal.id || idx} 
-                meal={meal} 
-                onReplace={(m) => handleReplaceMeal(viewDay - 1, idx, m.type)} 
-                t={t}
-              />
-            )) : (
-              <div className="card text-center" style={{ padding: '3rem 2rem' }}>
-                <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>restaurant_menu</span>
-                <h3>No meal plan found</h3>
-                <p className="text-muted" style={{ marginBottom: '1.5rem' }}>You haven't generated your personalized meal plan yet.</p>
-                {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
-                {genSuccess && <p className="text-success" style={{ marginBottom: '1rem', color: '#10b981' }}>{genSuccess}</p>}
-                <button className="btn btn-primary" onClick={handleGenerate} disabled={isGenerating}>
-                  {isGenerating ? 'Generating...' : 'Generate Meal Plan'}
-                </button>
+          ) : (
+            <>
+              {mealPlan.length > 1 && (
+                <div className="flex justify-center gap-2" style={{ marginBottom: '2.5rem', flexWrap: 'wrap' }}>
+                  {mealPlan.map((day, idx) => (
+                    <button 
+                      key={idx}
+                      className={`btn btn-sm ${viewDay === idx + 1 ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        minWidth: '70px',
+                        backgroundColor: viewDay === idx + 1 ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                        color: viewDay === idx + 1 ? '#111316' : 'var(--color-text)'
+                      }}
+                      onClick={() => setViewDay(idx + 1)}
+                    >
+                      {langCode === 'en' ? `Day ${idx + 1}` : `დღე ${idx + 1}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+              
+              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                <h3 style={{ marginBottom: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '0.75rem' }}>
+                  {langCode === 'en' ? `Day ${viewDay} Menu` : `დღე ${viewDay}-ის მენიუ`}
+                </h3>
+                {Array.isArray(mealPlan[viewDay - 1]?.meals) ? mealPlan[viewDay - 1].meals.map((meal, idx) => (
+                  <MealCard 
+                    key={meal.id || idx} 
+                    meal={meal} 
+                    onReplace={(m) => handleReplaceMeal(viewDay - 1, idx, m.type)} 
+                    t={t}
+                  />
+                )) : (
+                  <div className="card text-center" style={{ padding: '3rem 2rem' }}>
+                    <span className="material-symbols-outlined text-primary" style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>restaurant_menu</span>
+                    <h3>No meal plan found</h3>
+                    <p className="text-muted" style={{ marginBottom: '1.5rem' }}>You haven't generated your personalized meal plan yet.</p>
+                    {genError && <p className="text-danger" style={{ marginBottom: '1rem', color: 'var(--color-danger)' }}>{genError}</p>}
+                    {genSuccess && <p className="text-success" style={{ marginBottom: '1rem', color: '#10b981' }}>{genSuccess}</p>}
+                    <button className="btn btn-primary" onClick={handleGenerate} disabled={isGenerating}>
+                      {isGenerating ? 'Generating...' : 'Generate Meal Plan'}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
       )}
 
