@@ -82,6 +82,24 @@ const checkSubscriptionActive = (sub) => {
   return new Date(sub.subscriptionEndDate) >= new Date();
 };
 
+const getCurrentUserId = async () => {
+  const { data: sessionData, error: sessionError } =
+    await supabase.auth.getSession();
+
+  if (!sessionError && sessionData?.session?.user?.id) {
+    return sessionData.session.user.id;
+  }
+
+  const { data: userData, error: userError } =
+    await supabase.auth.getUser();
+
+  if (!userError && userData?.user?.id) {
+    return userData.user.id;
+  }
+
+  return null;
+};
+
 const saveUserPlansToSupabase = async (userId, plansData) => {
   if (!userId) return;
   try {
@@ -533,6 +551,17 @@ function App() {
   }, [currentView, isEmailVerified, isAuthLoading]);
 
   useEffect(() => {
+    if (isAuthLoading) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") === "success" && params.get("generate") === "true") {
+      // Clean query parameters from URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+      handleGenerateMealPlan();
+    }
+  }, [isAuthLoading]);
+
+  useEffect(() => {
     if (userData) localStorage.setItem('nutriPlanData', JSON.stringify(userData));
     if (subscriptionData) saveSubscription(subscriptionData);
     if (mealPlan) localStorage.setItem('nutriPlanResult', JSON.stringify(mealPlan));
@@ -619,9 +648,18 @@ function App() {
     }
   };
 
-  const handleGeneratePlansManually = async () => {
+  const handleGenerateMealPlan = async () => {
     try {
-      const answersRaw = localStorage.getItem("dietAnswers");
+      const userId = await getCurrentUserId();
+
+      if (!userId) {
+        throw new Error("Please log in first");
+      }
+
+      const answersRaw =
+        localStorage.getItem("dietAnswers") ||
+        localStorage.getItem("questionnaireAnswers") ||
+        localStorage.getItem("mealPlanAnswers");
 
       if (!answersRaw) {
         throw new Error("Please complete the questionnaire first");
@@ -629,19 +667,13 @@ function App() {
 
       const answers = JSON.parse(answersRaw);
 
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-
-      if (userError || !user?.id) {
-        throw new Error("Please log in first");
-      }
-
       const response = await fetch("/api/generate-meal-plan", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          userId: user.id,
+          userId,
           answers
         })
       });
@@ -665,7 +697,7 @@ function App() {
               meal_plan: data.mealPlan,
               questionnaire_answers: answers
             })
-            .eq('id', user.id);
+            .eq('id', userId);
         }
       } catch (dbErr) {
         console.warn("Could not save to Supabase during manual generation:", dbErr);
@@ -796,8 +828,9 @@ function App() {
       generateAndSetPlans(dataForPlans);
     }
 
-    setCurrentView('paymentSuccess');
-    window.history.pushState(null, '', `${APP_BASE_PATH}/dashboard`);
+    // Redirect directly to dashboard with success query params
+    window.history.pushState(null, '', `${APP_BASE_PATH}/dashboard?payment=success&generate=true`);
+    setCurrentView('dashboard');
   };
 
   const handleSubscriptionChange = (updatedSubData) => {
@@ -1079,7 +1112,7 @@ function App() {
             tdee={tdee}
             subscriptionData={subscriptionData}
             onCreateNewPlan={handleCalculateMyPlan}
-            onGeneratePlans={handleGeneratePlansManually}
+            onGeneratePlans={handleGenerateMealPlan}
             activeTab={dashboardTab}
             onActiveTabChange={(tab) => {
               setDashboardTab(tab);
